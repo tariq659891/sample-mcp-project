@@ -22,8 +22,10 @@ show_help() {
     echo "Commands:"
     echo "  list             List recent issues"
     echo "  prioritize       Show prioritized issues"
+    echo "  recommend        Recommend issues to work on based on your expertise"
     echo "  assigned USER    Show issues assigned to USER"
     echo "  analyze NUMBER   Analyze issue NUMBER in detail"
+    echo "  set-expertise    Set your areas of expertise (e.g., python ml diffusion)"
     echo ""
     echo "Options:"
     echo "  --limit N        Limit output to N issues (default: 10)"
@@ -31,9 +33,10 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  ./run_github_mcp.sh list"
-    echo "  ./run_github_mcp.sh prioritize --limit 5"
+    echo "  ./run_github_mcp.sh recommend --limit 5"
     echo "  ./run_github_mcp.sh assigned tariq659891"
     echo "  ./run_github_mcp.sh analyze 1"
+    echo "  ./run_github_mcp.sh set-expertise python machine-learning diffusion"
     echo ""
 }
 
@@ -44,6 +47,7 @@ shift
 LIMIT=10
 USERNAME=""
 ISSUE_NUMBER=""
+EXPERTISE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -60,6 +64,9 @@ while [[ $# -gt 0 ]]; do
                 USERNAME=$1
             elif [ -z "$ISSUE_NUMBER" ] && [ "$COMMAND" = "analyze" ]; then
                 ISSUE_NUMBER=$1
+            elif [ "$COMMAND" = "set-expertise" ]; then
+                # Collect all remaining arguments as expertise areas
+                EXPERTISE="$EXPERTISE $1"
             else
                 echo "Unknown option: $1"
                 show_help
@@ -79,10 +86,14 @@ fi
 # Execute appropriate command
 case "$COMMAND" in
     list)
-        python github_mcp_agent.py --repo "$REPO" --action list --limit $LIMIT
+        python github_mcp_agent.py --action list --limit $LIMIT
         ;;
     prioritize)
-        python github_mcp_agent.py --repo "$REPO" --action prioritize --limit $LIMIT
+        python github_mcp_agent.py --action prioritize --limit $LIMIT
+        ;;
+    recommend)
+        echo "Finding recommended issues for you to work on in huggingface/diffusers..."
+        python github_mcp_agent.py --action recommend --limit $LIMIT
         ;;
     assigned)
         if [ -z "$USERNAME" ]; then
@@ -90,7 +101,7 @@ case "$COMMAND" in
             show_help
             exit 1
         fi
-        python github_mcp_agent.py --repo "$REPO" --action assigned --username "$USERNAME" --limit $LIMIT
+        python github_mcp_agent.py --action assigned --username "$USERNAME" --limit $LIMIT
         ;;
     analyze)
         if [ -z "$ISSUE_NUMBER" ]; then
@@ -98,7 +109,19 @@ case "$COMMAND" in
             show_help
             exit 1
         fi
-        python github_mcp_agent.py --repo "$REPO" --action analyze --issue "$ISSUE_NUMBER"
+        python github_mcp_agent.py --action analyze --issue "$ISSUE_NUMBER"
+        ;;
+    set-expertise)
+        if [ -z "$EXPERTISE" ]; then
+            echo "Error: Please provide at least one area of expertise"
+            echo "Example: ./run_github_mcp.sh set-expertise python machine-learning diffusion"
+            exit 1
+        fi
+        # Trim leading space
+        EXPERTISE="${EXPERTISE## }"
+        echo "Setting your expertise areas to: $EXPERTISE"
+        python github_mcp_agent.py --expertise $EXPERTISE
+        echo "Your expertise has been updated. Run 'recommend' to see issues matching your skills."
         ;;
     *)
         echo "Unknown command: $COMMAND"

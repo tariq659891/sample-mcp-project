@@ -47,9 +47,12 @@ class GitHubMCPAgent:
             sys.exit(1)
     
     def _make_request(self, endpoint: str, method: str = 'GET', data: Optional[Dict] = None) -> Dict:
-        """Make a request to the GitHub API"""
+        """Make a request to the GitHub API with rate limit handling"""
         url = f"{self.base_url}/{endpoint}"
         try:
+            # Check rate limits first
+            self._check_rate_limits()
+            
             if method == 'GET':
                 response = requests.get(url, headers=self.headers)
             elif method == 'POST':
@@ -59,11 +62,36 @@ class GitHubMCPAgent:
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
             
+            # Handle rate limiting
+            if response.status_code == 403 and 'rate limit exceeded' in response.text.lower():
+                reset_time = int(response.headers.get('X-RateLimit-Reset', 0))
+                wait_time = max(reset_time - time.time(), 0) + 1
+                print(f"⚠️ Rate limit exceeded. Waiting for {wait_time:.0f} seconds...")
+                time.sleep(wait_time)
+                return self._make_request(endpoint, method, data)  # Retry after waiting
+                
             response.raise_for_status()
             return response.json() if response.content else {}
         except requests.exceptions.RequestException as e:
             print(f"Error making request to {url}: {e}")
             return {}
+            
+    def _check_rate_limits(self) -> None:
+        """Check GitHub API rate limits and wait if needed"""
+        try:
+            response = requests.get("https://api.github.com/rate_limit", headers=self.headers)
+            if response.status_code == 200:
+                data = response.json()
+                core = data.get('resources', {}).get('core', {})
+                remaining = core.get('remaining', 1)
+                reset_time = core.get('reset', 0)
+                
+                if remaining <= 5:  # Keep a small buffer
+                    wait_time = max(reset_time - time.time(), 0) + 1
+                    print(f"⚠️ Only {remaining} API calls remaining. Waiting for {wait_time:.0f} seconds...")
+                    time.sleep(wait_time)
+        except Exception as e:
+            print(f"Warning: Could not check rate limits: {e}")
     
     def get_issues(self, state: str = 'open', sort: str = 'created', 
                   direction: str = 'desc', limit: int = 100) -> List[Dict]:
@@ -101,17 +129,33 @@ class GitHubMCPAgent:
     
     def prioritize_issues(self, issues: List[Dict]) -> List[Dict]:
         """
-        Prioritize issues based on various factors
+        Prioritize issues based on various factors and user expertise
         
         Factors considered:
         - Age of issue (older issues get higher priority)
         - Number of comments (more engagement = higher priority)
-        - Labels (e.g., 'bug', 'high-priority')
+        - Labels (e.g., 'bug', 'high-priority', 'good first issue')
         - Complexity (estimated by description length and code blocks)
+        - Match with user expertise
+        - Contributor friendliness
         
         Returns:
             List of issues sorted by priority (highest first)
         """
+        # Load configuration
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcp_config.json')
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            config = {}
+        
+        # Get user expertise and preferences
+        user_expertise = config.get('agent', {}).get('user_expertise', [])
+        high_priority_labels = config.get('github', {}).get('issue_priorities', {}).get('high', [])
+        medium_priority_labels = config.get('github', {}).get('issue_priorities', {}).get('medium', [])
+        preferred_issue_types = config.get('actions', {}).get('contribution_preferences', {}).get('issue_types', [])
+        
         prioritized = []
         
         for issue in issues:
@@ -122,27 +166,58 @@ class GitHubMCPAgent:
             
             # Check for priority labels
             labels = [label['name'].lower() for label in issue.get('labels', [])]
-            has_bug_label = any('bug' in label for label in labels)
-            has_priority_label = any('priority' in label for label in labels)
-            has_high_priority = any(('high' in label and 'priority' in label) for label in labels)
+            
+            # Label-based priority
+            label_score = 0
+            for label in labels:
+                if any(high_label.lower() in label for high_label in high_priority_labels):
+                    label_score += 10
+                if any(medium_label.lower() in label for medium_label in medium_priority_labels):
+                    label_score += 5
+            
+            # Contributor friendliness
+            contributor_score = 0
+            if any('good first issue' in label for label in labels):
+                contributor_score += 15
+            if any('help wanted' in label for label in labels):
+                contributor_score += 10
+            if any('beginner' in label for label in labels):
+                contributor_score += 8
+            
+            # Expertise match
+            expertise_score = 0
+            issue_text = (issue.get('title', '') + ' ' + issue.get('body', '')).lower()
+            for expertise in user_expertise:
+                if expertise.lower() in issue_text:
+                    expertise_score += 5
+            
+            # Preference match
+            preference_score = 0
+            for issue_type in preferred_issue_types:
+                if any(issue_type.lower() in label for label in labels):
+                    preference_score += 8
             
             # Estimate complexity
             description_length = len(issue['body']) if issue.get('body') else 0
             code_block_count = issue['body'].count('```') // 2 if issue.get('body') else 0
+            complexity_penalty = (description_length * 0.01) + (code_block_count * 2)
             
             # Calculate priority score
             priority_score = (
-                age_days * 0.5 +                  # Age factor
-                comments_count * 2 +              # Engagement factor
-                (10 if has_bug_label else 0) +    # Bug label bonus
-                (5 if has_priority_label else 0) + # Priority label bonus
-                (15 if has_high_priority else 0) - # High priority bonus
-                (description_length * 0.01) -     # Complexity penalty
-                (code_block_count * 2)            # Code complexity penalty
+                age_days * 0.3 +                # Age factor (reduced weight)
+                comments_count * 1.5 +          # Engagement factor
+                label_score +                   # Label-based priority
+                contributor_score +             # Contributor friendliness
+                expertise_score +               # Expertise match
+                preference_score -              # Preference match
+                complexity_penalty              # Complexity penalty
             )
             
             # Add priority score to issue
             issue['priority_score'] = priority_score
+            issue['expertise_match'] = expertise_score > 0
+            issue['contributor_friendly'] = contributor_score > 0
+            issue['complexity_estimate'] = 'High' if complexity_penalty > 15 else 'Medium' if complexity_penalty > 5 else 'Low'
             prioritized.append(issue)
         
         # Sort by priority score (highest first)
@@ -274,18 +349,49 @@ class GitHubMCPAgent:
 def main():
     """Main function to run the GitHub MCP Agent"""
     parser = argparse.ArgumentParser(description='GitHub MCP Agent')
-    parser.add_argument('--repo', required=True, help='GitHub repository (username/repo)')
+    parser.add_argument('--repo', help='GitHub repository (username/repo)')
     parser.add_argument('--token', help='GitHub Personal Access Token')
-    parser.add_argument('--action', choices=['list', 'prioritize', 'assigned', 'analyze'], 
+    parser.add_argument('--action', choices=['list', 'prioritize', 'assigned', 'analyze', 'recommend'], 
                         default='list', help='Action to perform')
     parser.add_argument('--username', help='GitHub username (for assigned issues)')
     parser.add_argument('--issue', type=int, help='Issue number (for analyze action)')
     parser.add_argument('--limit', type=int, default=10, help='Maximum number of issues to display')
+    parser.add_argument('--expertise', nargs='+', help='Your areas of expertise (space-separated)')
+    parser.add_argument('--config', help='Path to config file (default: mcp_config.json)')
     
     args = parser.parse_args()
     
+    # Load configuration
+    config_path = args.config or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'mcp_config.json')
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+            # Use repo from config if not specified in command line
+            if not args.repo:
+                args.repo = config.get('github', {}).get('repository')
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        if not args.repo:
+            print(f"Error: Could not load config file and no repository specified: {e}")
+            sys.exit(1)
+    
+    if not args.repo:
+        print("Error: No repository specified. Use --repo or configure in mcp_config.json")
+        sys.exit(1)
+    
     # Initialize agent
     agent = GitHubMCPAgent(args.repo, args.token)
+    
+    # Update expertise if provided
+    if args.expertise and config:
+        if 'agent' not in config:
+            config['agent'] = {}
+        config['agent']['user_expertise'] = args.expertise
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            print(f"Updated expertise in config file: {', '.join(args.expertise)}")
+        except Exception as e:
+            print(f"Warning: Could not update config file: {e}")
     
     # Perform requested action
     if args.action == 'list':
@@ -300,6 +406,41 @@ def main():
         print(f"\nTop {args.limit} prioritized issues in {args.repo}:")
         for issue in prioritized[:args.limit]:
             agent.display_issue_summary(issue)
+    
+    elif args.action == 'recommend':
+        issues = agent.get_issues(limit=100)  # Get more issues for better prioritization
+        prioritized = agent.prioritize_issues(issues)
+        
+        # Filter for contributor-friendly issues that match expertise
+        recommended = [i for i in prioritized if i.get('contributor_friendly', False) and i.get('expertise_match', False)]
+        if not recommended:
+            # Fall back to just contributor-friendly if no expertise matches
+            recommended = [i for i in prioritized if i.get('contributor_friendly', False)]
+        if not recommended:
+            # Fall back to top prioritized issues if no contributor-friendly issues
+            recommended = prioritized
+        
+        print(f"\nRecommended issues to work on in {args.repo}:")
+        print(f"{'=' * 80}")
+        print(f"Based on your expertise and issue characteristics, here are the top {min(args.limit, len(recommended))} issues you could contribute to:")
+        print(f"{'=' * 80}")
+        
+        for i, issue in enumerate(recommended[:args.limit], 1):
+            print(f"\nRECOMMENDATION #{i}:")
+            agent.display_issue_summary(issue)
+            print(f"Why this issue: ")
+            reasons = []
+            if issue.get('contributor_friendly'):
+                reasons.append("✅ Marked as good for contributors")
+            if issue.get('expertise_match'):
+                reasons.append("✅ Matches your expertise")
+            if issue.get('complexity_estimate') == 'Low':
+                reasons.append("✅ Relatively low complexity")
+            if issue.get('priority_score', 0) > 30:
+                reasons.append("✅ High priority for the project")
+            
+            for reason in reasons:
+                print(f"  {reason}")
     
     elif args.action == 'assigned':
         if not args.username:

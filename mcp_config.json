@@ -1,26 +1,27 @@
 {
   "github": {
-    "repository": "tariq659891/sample-mcp-project",
+    "repository": "huggingface/diffusers",
     "token_env_var": "GITHUB_TOKEN",
-    "default_branch": "master",
+    "default_branch": "main",
     "issue_priorities": {
-      "high": ["bug", "high-priority", "security"],
-      "medium": ["enhancement", "feature"],
-      "low": ["documentation", "question"]
+      "high": ["bug", "high-priority", "security", "good first issue"],
+      "medium": ["enhancement", "feature", "new model"],
+      "low": ["documentation", "question", "examples"]
     },
-    "auto_assign": true,
-    "auto_comment": true
+    "auto_assign": false,
+    "auto_comment": false
   },
   "agent": {
-    "name": "GitHub MCP Agent",
+    "name": "GitHub MCP Agent for Diffusers",
     "version": "1.0.0",
     "check_interval_minutes": 15,
-    "max_issues_to_analyze": 50,
+    "max_issues_to_analyze": 100,
     "priority_thresholds": {
       "high": 30,
       "medium": 15,
       "low": 0
-    }
+    },
+    "user_expertise": ["python", "machine learning", "diffusion models"]
   },
   "integrations": {
     "slack": {
@@ -36,14 +37,21 @@
     }
   },
   "actions": {
-    "auto_label": true,
-    "auto_close_stale": true,
+    "auto_label": false,
+    "auto_close_stale": false,
     "stale_days": 30,
-    "auto_assign_by_expertise": true,
+    "auto_assign_by_expertise": false,
     "expertise_mapping": {
-      "frontend": ["app.py", "*.html", "*.css", "*.js"],
-      "backend": ["*.py", "requirements.txt"],
-      "documentation": ["*.md", "docs/*"]
+      "models": ["src/diffusers/models/*.py", "src/diffusers/pipelines/*.py"],
+      "training": ["src/diffusers/training/*.py", "examples/training/*.py"],
+      "schedulers": ["src/diffusers/schedulers/*.py"],
+      "documentation": ["docs/*", "*.md", "examples/*.py"],
+      "infrastructure": ["setup.py", "requirements.txt", ".github/*"]
+    },
+    "contribution_preferences": {
+      "issue_types": ["bug", "enhancement", "good first issue"],
+      "difficulty_level": "beginner to intermediate",
+      "time_commitment": "medium"
     }
   }
 }

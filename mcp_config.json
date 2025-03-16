@@ -1,0 +1,49 @@
+{
+  "github": {
+    "repository": "tariq659891/sample-mcp-project",
+    "token_env_var": "GITHUB_TOKEN",
+    "default_branch": "master",
+    "issue_priorities": {
+      "high": ["bug", "high-priority", "security"],
+      "medium": ["enhancement", "feature"],
+      "low": ["documentation", "question"]
+    },
+    "auto_assign": true,
+    "auto_comment": true
+  },
+  "agent": {
+    "name": "GitHub MCP Agent",
+    "version": "1.0.0",
+    "check_interval_minutes": 15,
+    "max_issues_to_analyze": 50,
+    "priority_thresholds": {
+      "high": 30,
+      "medium": 15,
+      "low": 0
+    }
+  },
+  "integrations": {
+    "slack": {
+      "enabled": false,
+      "webhook_url": "",
+      "channel": "#github-issues"
+    },
+    "email": {
+      "enabled": false,
+      "smtp_server": "",
+      "from_address": "",
+      "to_addresses": []
+    }
+  },
+  "actions": {
+    "auto_label": true,
+    "auto_close_stale": true,
+    "stale_days": 30,
+    "auto_assign_by_expertise": true,
+    "expertise_mapping": {
+      "frontend": ["app.py", "*.html", "*.css", "*.js"],
+      "backend": ["*.py", "requirements.txt"],
+      "documentation": ["*.md", "docs/*"]
+    }
+  }
+}
